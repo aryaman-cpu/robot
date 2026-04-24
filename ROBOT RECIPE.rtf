@@ -1,0 +1,185 @@
+{\rtf1\ansi\ansicpg1252\cocoartf2868
+\cocoatextscaling0\cocoaplatform0{\fonttbl\f0\fswiss\fcharset0 Helvetica;}
+{\colortbl;\red255\green255\blue255;}
+{\*\expandedcolortbl;;}
+\paperw11900\paperh16840\margl1440\margr1440\vieww33400\viewh21000\viewkind0
+\pard\tx720\tx1440\tx2160\tx2880\tx3600\tx4320\tx5040\tx5760\tx6480\tx7200\tx7920\tx8640\pardirnatural\partightenfactor0
+
+\f0\fs64 \cf0 RC SUMO ROBOT RECIPE (ft Aryaman and Rishu)\
+\
+\ul MATERIALS:  Arduino Uno , L298N Motor Driver , Johnson Motors , Lipo Battery 12v , Lithum Battery 7v , All kinds of wires , Hc05 bluetooth module + mehnat\ulnone \
+\
+Connections : \
+\
+STEP 1:Arduino should be powered with Lipo Battery. \
+\
+1. Battery Red(positive) with VIN(arduino)\
+2. Battery Black (Negative) with GND(arduino)\
+\
+\
+\
+STEP 2: Powering hc05 bluetooth module\
+\
+1. RX(hc05) with TX(arduino)\
+2. TX(hco5) with RX(arduino) \
+3. VCC(hc05) with 5v(arduino)\
+4. GND (hc05) with MOTOR DRIVER GND\
+\
+\
+\
+STEP 3: Connecting Motor Driver With Johnson Motor\
+\
+1. LEFT SIDE Motors (in paralell) with OUTPUT 1\
+2. RIGHT SIDE Motors (in paralell) with OUTPUT 2\
+3. CONNECT ENA PINS WITH ARDUINO ACCORDING TO YOUR CODE \
+\
+\
+STEP 4: Powering Motor Driver\
+\
+1.12v and GND with Lithum Battery (to power it)\
+2.Connect GND(motor driver) with GND (arduino) with jumper wire [IMP]\
+\
+\
+\
+STEP 5: Code Arduino \
+\
+1. Use arduino cloud \
+2. Enter code\
+3. Run it \
+\
+CODE:\
+\
+\
+/**\
+ * Bluetooth RC Car Control Sketch\
+ * * Hardware Setup:\
+ * - Arduino Uno\
+ * - L298N Motor Driver\
+ * - HC-05 Bluetooth Module (Connected to Pins 0/1 or SoftwareSerial)\
+ * - 4 Johnson Geared Motors (Wired in pairs: 2 Left, 2 Right)\
+ * - 2 Li-ion Batteries (Connected to L298N 12V and GND)\
+ * * Pin Mapping:\
+ * L298N -> Arduino:\
+ * ENA (PWM) -> Pin 10 (Left Speed)\
+ * IN1       -> Pin 9  (Left Forward)\
+ * IN2       -> Pin 8  (Left Backward)\
+ * IN3       -> Pin 7  (Right Forward)\
+ * IN4       -> Pin 6  (Right Backward)\
+ * ENB (PWM) -> Pin 5  (Right Speed)\
+ * * HC-05 -> Arduino:\
+ * TX -> RX (Pin 0)\
+ * RX -> TX (Pin 1 via voltage divider)\
+ */\
+\
+// L298N Control Pins\
+const int ENA = 10;\
+const int IN1 = 9;\
+const int IN2 = 8;\
+const int IN3 = 7;\
+const int IN4 = 6;\
+const int ENB = 5;\
+\
+// State Variables\
+char command;        // To store the incoming byte from Bluetooth\
+int motorSpeed = 200; // Default speed (0-255)\
+\
+void setup() \{\
+  // Initialize Motor Pins as Outputs\
+  pinMode(ENA, OUTPUT);\
+  pinMode(IN1, OUTPUT);\
+  pinMode(IN2, OUTPUT);\
+  pinMode(IN3, OUTPUT);\
+  pinMode(IN4, OUTPUT);\
+  pinMode(ENB, OUTPUT);\
+\
+  // Start Serial Communication (HC-05 default is usually 9600)\
+  Serial.begin(9600);\
+  \
+  // Ensure motors are stopped on startup\
+  stopMotors();\
+\}\
+\
+void loop() \{\
+  // Check if data is available from the Bluetooth module\
+  if (Serial.available() > 0) \{\
+    command = Serial.read();\
+\
+    switch (command) \{\
+      case 'F': // Forward\
+        moveForward();\
+        break;\
+      case 'B': // Backward\
+        moveBackward();\
+        break;\
+      case 'L': // Left\
+        turnLeft();\
+        break;\
+      case 'R': // Right\
+        turnRight();\
+        break;\
+      case 'S': // Stop\
+        stopMotors();\
+        break;\
+      case '0': motorSpeed = 100; break; // Set speed levels (if app supports it)\
+      case '5': motorSpeed = 180; break;\
+      case 'q': motorSpeed = 255; break;\
+    \}\
+  \}\
+\}\
+\
+/**\
+ * Motor Control Functions\
+ * Note: Wiring polarity matters. If a side moves the wrong way, \
+ * swap the two wires of the motor on the L298N terminal.\
+ */\
+\
+void moveForward() \{\
+  analogWrite(ENA, motorSpeed);\
+  analogWrite(ENB, motorSpeed);\
+  digitalWrite(IN1, HIGH);\
+  digitalWrite(IN2, LOW);\
+  digitalWrite(IN3, HIGH);\
+  digitalWrite(IN4, LOW);\
+\}\
+\
+void moveBackward() \{\
+  analogWrite(ENA, motorSpeed);\
+  analogWrite(ENB, motorSpeed);\
+  digitalWrite(IN1, LOW);\
+  digitalWrite(IN2, HIGH);\
+  digitalWrite(IN3, LOW);\
+  digitalWrite(IN4, HIGH);\
+\}\
+\
+void turnLeft() \{\
+  // Spin on axis: Left motors back, Right motors forward\
+  analogWrite(ENA, motorSpeed);\
+  analogWrite(ENB, motorSpeed);\
+  digitalWrite(IN1, LOW);\
+  digitalWrite(IN2, HIGH);\
+  digitalWrite(IN3, HIGH);\
+  digitalWrite(IN4, LOW);\
+\}\
+\
+void turnRight() \{\
+  // Spin on axis: Left motors forward, Right motors back\
+  analogWrite(ENA, motorSpeed);\
+  analogWrite(ENB, motorSpeed);\
+  digitalWrite(IN1, HIGH);\
+  digitalWrite(IN2, LOW);\
+  digitalWrite(IN3, LOW);\
+  digitalWrite(IN4, HIGH);\
+\}\
+\
+void stopMotors() \{\
+  digitalWrite(IN1, LOW);\
+  digitalWrite(IN2, LOW);\
+  digitalWrite(IN3, LOW);\
+  digitalWrite(IN4, LOW);\
+  analogWrite(ENA, 0);\
+  analogWrite(ENB, 0);\
+\
+\
+\
+\
+	}
