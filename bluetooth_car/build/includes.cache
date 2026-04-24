@@ -1,0 +1,139 @@
+[
+  {
+    "added_include_path": "/Users/guranshbir2012/Library/Arduino15/packages/arduino/hardware/avr/1.8.7/cores/arduino"
+  },
+  {
+    "added_include_path": "/Users/guranshbir2012/Library/Arduino15/packages/arduino/hardware/avr/1.8.7/variants/standard"
+  },
+  {
+    "compile": {
+      "source_path": "/Users/guranshbir2012/Development/Robotics/bluetooth_car/build/sketch/bluetooth_car.ino.cpp",
+      "object_path": "/Users/guranshbir2012/Development/Robotics/bluetooth_car/build/sketch/bluetooth_car.ino.cpp.o",
+      "depfile_path": "/Users/guranshbir2012/Development/Robotics/bluetooth_car/build/sketch/bluetooth_car.ino.cpp.d"
+    },
+    "compile_task": {
+      "args": [
+        "/Users/guranshbir2012/Library/Arduino15/packages/arduino/tools/avr-gcc/7.3.0-atmel3.6.1-arduino7/bin/avr-g++",
+        "-c",
+        "-g",
+        "-Os",
+        "-w",
+        "-std=gnu++11",
+        "-fpermissive",
+        "-fno-exceptions",
+        "-ffunction-sections",
+        "-fdata-sections",
+        "-fno-threadsafe-statics",
+        "-Wno-error=narrowing",
+        "-flto",
+        "-w",
+        "-x",
+        "c++",
+        "-E",
+        "-CC",
+        "-mmcu=atmega328p",
+        "-DF_CPU=16000000L",
+        "-DARDUINO=10607",
+        "-DARDUINO_AVR_UNO",
+        "-DARDUINO_ARCH_AVR",
+        "-I/Users/guranshbir2012/Library/Arduino15/packages/arduino/hardware/avr/1.8.7/cores/arduino",
+        "-I/Users/guranshbir2012/Library/Arduino15/packages/arduino/hardware/avr/1.8.7/variants/standard",
+        "/Users/guranshbir2012/Development/Robotics/bluetooth_car/build/sketch/bluetooth_car.ino.cpp",
+        "-o",
+        "/dev/null"
+      ]
+    }
+  },
+  {
+    "missing_include_h": "SoftwareSerial.h"
+  },
+  {
+    "added_include_path": "/Users/guranshbir2012/Library/Arduino15/packages/arduino/hardware/avr/1.8.7/libraries/SoftwareSerial/src"
+  },
+  {
+    "compile": {
+      "source_path": "/Users/guranshbir2012/Development/Robotics/bluetooth_car/build/sketch/bluetooth_car.ino.cpp",
+      "object_path": "/Users/guranshbir2012/Development/Robotics/bluetooth_car/build/sketch/bluetooth_car.ino.cpp.o",
+      "depfile_path": "/Users/guranshbir2012/Development/Robotics/bluetooth_car/build/sketch/bluetooth_car.ino.cpp.d"
+    },
+    "compile_task": {
+      "args": [
+        "/Users/guranshbir2012/Library/Arduino15/packages/arduino/tools/avr-gcc/7.3.0-atmel3.6.1-arduino7/bin/avr-g++",
+        "-c",
+        "-g",
+        "-Os",
+        "-w",
+        "-std=gnu++11",
+        "-fpermissive",
+        "-fno-exceptions",
+        "-ffunction-sections",
+        "-fdata-sections",
+        "-fno-threadsafe-statics",
+        "-Wno-error=narrowing",
+        "-flto",
+        "-w",
+        "-x",
+        "c++",
+        "-E",
+        "-CC",
+        "-mmcu=atmega328p",
+        "-DF_CPU=16000000L",
+        "-DARDUINO=10607",
+        "-DARDUINO_AVR_UNO",
+        "-DARDUINO_ARCH_AVR",
+        "-I/Users/guranshbir2012/Library/Arduino15/packages/arduino/hardware/avr/1.8.7/cores/arduino",
+        "-I/Users/guranshbir2012/Library/Arduino15/packages/arduino/hardware/avr/1.8.7/variants/standard",
+        "-I/Users/guranshbir2012/Library/Arduino15/packages/arduino/hardware/avr/1.8.7/libraries/SoftwareSerial/src",
+        "/Users/guranshbir2012/Development/Robotics/bluetooth_car/build/sketch/bluetooth_car.ino.cpp",
+        "-o",
+        "/dev/null"
+      ]
+    }
+  },
+  {
+    "missing_include_h": ""
+  },
+  {
+    "compile": {
+      "source_path": "/Users/guranshbir2012/Library/Arduino15/packages/arduino/hardware/avr/1.8.7/libraries/SoftwareSerial/src/SoftwareSerial.cpp",
+      "object_path": "/Users/guranshbir2012/Development/Robotics/bluetooth_car/build/libraries/SoftwareSerial/SoftwareSerial.cpp.o",
+      "depfile_path": "/Users/guranshbir2012/Development/Robotics/bluetooth_car/build/libraries/SoftwareSerial/SoftwareSerial.cpp.d"
+    },
+    "compile_task": {
+      "args": [
+        "/Users/guranshbir2012/Library/Arduino15/packages/arduino/tools/avr-gcc/7.3.0-atmel3.6.1-arduino7/bin/avr-g++",
+        "-c",
+        "-g",
+        "-Os",
+        "-w",
+        "-std=gnu++11",
+        "-fpermissive",
+        "-fno-exceptions",
+        "-ffunction-sections",
+        "-fdata-sections",
+        "-fno-threadsafe-statics",
+        "-Wno-error=narrowing",
+        "-flto",
+        "-w",
+        "-x",
+        "c++",
+        "-E",
+        "-CC",
+        "-mmcu=atmega328p",
+        "-DF_CPU=16000000L",
+        "-DARDUINO=10607",
+        "-DARDUINO_AVR_UNO",
+        "-DARDUINO_ARCH_AVR",
+        "-I/Users/guranshbir2012/Library/Arduino15/packages/arduino/hardware/avr/1.8.7/cores/arduino",
+        "-I/Users/guranshbir2012/Library/Arduino15/packages/arduino/hardware/avr/1.8.7/variants/standard",
+        "-I/Users/guranshbir2012/Library/Arduino15/packages/arduino/hardware/avr/1.8.7/libraries/SoftwareSerial/src",
+        "/Users/guranshbir2012/Library/Arduino15/packages/arduino/hardware/avr/1.8.7/libraries/SoftwareSerial/src/SoftwareSerial.cpp",
+        "-o",
+        "/dev/null"
+      ]
+    }
+  },
+  {
+    "missing_include_h": ""
+  }
+]

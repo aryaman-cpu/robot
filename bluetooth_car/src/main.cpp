@@ -1,0 +1,263 @@
+#include <Arduino.h>
+#include <Servo.h>
+#include <SoftwareSerial.h>
+
+// Function Prototypes
+void checkBluetoothCommand();
+void checkFailSafe();
+void executeCommand(char command);
+void moveForward();
+void moveBackward();
+void turnLeft();
+void turnRight();
+void stopAllMotors();
+
+// HC-05 Bluetooth Module pins
+const int bluetoothRxPin = 2; // Connect to HC-05 TX
+const int bluetoothTxPin = 3; // Connect to HC-05 RX
+SoftwareSerial bluetooth(bluetoothRxPin, bluetoothTxPin);
+
+// L298N Motor Driver pins
+const int leftMotorEnablePin =
+    5; // PWM pin for left speed (Timer 0 - safe with Servo lib)
+const int leftMotorForwardPin = 7;
+const int leftMotorBackwardPin = 8;
+
+const int rightMotorEnablePin =
+    6; // PWM pin for right speed (Timer 0 - safe with Servo lib)
+const int rightMotorForwardPin = 9;
+const int rightMotorBackwardPin = 10;
+
+// ==========================================
+// WEAPON CONTROL (Servo)
+// ==========================================
+// NOTE: The Servo library uses Timer 1 on the Uno. Pins 9 and 10 are direction
+// pins only (digitalWrite), so there is NO conflict with our PWM enable pins 5
+// & 6.
+const int weaponServoPin = 11;
+Servo weaponServo;
+const int SERVO_STOWED_ANGLE = 0;  // Safe, lowered position
+const int SERVO_RAISED_ANGLE = 90; // Active, raised position
+
+// ==========================================
+// CRITICAL FAIL-SAFE PARAMETERS
+// ==========================================
+unsigned long lastSignalTime = 0;
+// Halt all motors if no Bluetooth command is received for 2500 milliseconds.
+const unsigned long radioSignalTimeout = 2500;
+bool isFailSafeActive = false;
+
+// ==========================================
+// SPEED CONTROL
+// ==========================================
+// Default motor speed (0-255). Adjustable with '+' and '-' commands.
+int currentSpeed = 255;
+const int SPEED_MIN = 50;
+const int SPEED_MAX = 255;
+const int SPEED_STEP = 25;
+
+const int statusLedPin = LED_BUILTIN;
+
+void setup() {
+  // Initialize Serial monitor for debugging
+  Serial.begin(9600);
+
+  // Initialize HC-05 Bluetooth communication
+  bluetooth.begin(9600);
+
+  // Configure motor driver pins as outputs
+  pinMode(leftMotorEnablePin, OUTPUT);
+  pinMode(leftMotorForwardPin, OUTPUT);
+  pinMode(leftMotorBackwardPin, OUTPUT);
+
+  pinMode(rightMotorEnablePin, OUTPUT);
+  pinMode(rightMotorForwardPin, OUTPUT);
+  pinMode(rightMotorBackwardPin, OUTPUT);
+  pinMode(statusLedPin, OUTPUT);
+  digitalWrite(statusLedPin, LOW);
+
+  // Attach the weapon servo and stow it immediately for safety
+  weaponServo.attach(weaponServoPin);
+  weaponServo.write(SERVO_STOWED_ANGLE);
+
+  // Initialize all motor pins to LOW immediately for safety
+  stopAllMotors();
+
+  Serial.println("Antigravity Bluetooth RC System Initialized.");
+  Serial.println(
+      "Movement: F/B/L/R/S | Weapon: U (raise) D (lower) | Speed: +/-");
+
+  lastSignalTime = millis();
+}
+
+void loop() {
+  checkBluetoothCommand();
+  checkFailSafe();
+}
+
+void checkBluetoothCommand() {
+  char command = '\0';
+
+  // Bluetooth is checked FIRST — it is the primary control source in
+  // competition. Serial is checked second as a fallback for Wokwi simulation /
+  // bench testing.
+  if (bluetooth.available() > 0) {
+    command = bluetooth.read();
+  } else if (Serial.available() > 0) {
+    command = Serial.read();
+  }
+
+  if (command != '\0') {
+    if (command == '\n' || command == '\r')
+      return;
+
+    // Convert uppercase to lowercase for case-insensitive handling
+    if (command >= 'A' && command <= 'Z') {
+      command = command - 'A' + 'a';
+    }
+
+    Serial.print("Received Command: ");
+    Serial.println(command);
+
+    // --- FAIL-SAFE TIMER LOGIC ---
+    // Only MOVEMENT commands reset the fail-safe timer.
+    // Weapon ('u','d'), stop ('s'), and speed ('+','-') commands do NOT reset
+    // the timer. This is intentional: if the remote app crashes but gets stuck
+    // sending those commands, the fail-safe will still trigger and halt the
+    // robot.
+    if (command == 'f' || command == 'b' || command == 'l' || command == 'r') {
+      lastSignalTime = millis();
+      if (isFailSafeActive) {
+        Serial.println("Signal restored. Disengaging Fail-Safe.");
+        isFailSafeActive = false;
+      }
+    }
+
+    executeCommand(command);
+  }
+}
+
+void checkFailSafe() {
+  if (!isFailSafeActive) {
+    if (millis() - lastSignalTime > radioSignalTimeout) {
+      isFailSafeActive = true;
+      Serial.println("CRITICAL: Signal lost! Engaging Fail-Safe.");
+      stopAllMotors();
+    }
+  }
+}
+
+void executeCommand(char command) {
+  switch (command) {
+  // --- MOVEMENT ---
+  case 'f':
+    moveForward();
+    break;
+  case 'b':
+    moveBackward();
+    break;
+  case 'l':
+    turnLeft();
+    break;
+  case 'r':
+    turnRight();
+    break;
+  case 's':
+    stopAllMotors();
+    break;
+
+  // --- WEAPON CONTROL ---
+  // These do NOT reset the fail-safe timer (not locomotion signals).
+  case 'u':
+    weaponServo.write(SERVO_RAISED_ANGLE);
+    Serial.println("Weapon: RAISED");
+    break;
+  case 'd':
+    weaponServo.write(SERVO_STOWED_ANGLE);
+    Serial.println("Weapon: STOWED");
+    break;
+
+  // --- SPEED CONTROL ---
+  // These also do NOT reset the fail-safe timer.
+  case '+':
+    currentSpeed = min(currentSpeed + SPEED_STEP, SPEED_MAX);
+    Serial.print("Speed set to: ");
+    Serial.println(currentSpeed);
+    break;
+  case '-':
+    currentSpeed = max(currentSpeed - SPEED_STEP, SPEED_MIN);
+    Serial.print("Speed set to: ");
+    Serial.println(currentSpeed);
+    break;
+
+  default:
+    break;
+  }
+}
+
+void moveForward() {
+  digitalWrite(statusLedPin, HIGH);
+  digitalWrite(leftMotorForwardPin, HIGH);
+  digitalWrite(leftMotorBackwardPin, LOW);
+  analogWrite(leftMotorEnablePin, currentSpeed);
+  digitalWrite(rightMotorForwardPin, HIGH);
+  digitalWrite(rightMotorBackwardPin, LOW);
+  analogWrite(rightMotorEnablePin, currentSpeed);
+}
+
+void moveBackward() {
+  digitalWrite(statusLedPin, LOW);
+  digitalWrite(leftMotorForwardPin, LOW);
+  digitalWrite(leftMotorBackwardPin, HIGH);
+  analogWrite(leftMotorEnablePin, currentSpeed);
+  digitalWrite(rightMotorForwardPin, LOW);
+  digitalWrite(rightMotorBackwardPin, HIGH);
+  analogWrite(rightMotorEnablePin, currentSpeed);
+}
+
+void turnLeft() {
+  digitalWrite(statusLedPin, LOW);
+  // Left motor reverses, right motor drives forward = pivot left
+  digitalWrite(leftMotorForwardPin, LOW);
+  digitalWrite(leftMotorBackwardPin, HIGH);
+  analogWrite(leftMotorEnablePin, currentSpeed);
+  digitalWrite(rightMotorForwardPin, HIGH);
+  digitalWrite(rightMotorBackwardPin, LOW);
+  analogWrite(rightMotorEnablePin, currentSpeed);
+}
+
+void turnRight() {
+  digitalWrite(statusLedPin, LOW);
+  // Right motor reverses, left motor drives forward = pivot right
+  digitalWrite(leftMotorForwardPin, HIGH);
+  digitalWrite(leftMotorBackwardPin, LOW);
+  analogWrite(leftMotorEnablePin, currentSpeed);
+  digitalWrite(rightMotorForwardPin, LOW);
+  digitalWrite(rightMotorBackwardPin, HIGH);
+  analogWrite(rightMotorEnablePin, currentSpeed);
+}
+
+// --- ACTIVE MOTOR BRAKING ---
+// On the L298N, setting both IN pins LOW with the enable pin HIGH creates a
+// short-circuit brake across the motor terminals. This stops the robot MUCH
+// faster than simply cutting power (which causes the robot to coast freely).
+// This is critical for a combat robot where instant stopping is a safety
+// requirement.
+void stopAllMotors() {
+  digitalWrite(statusLedPin, LOW);
+
+  // Active brake: both direction pins LOW, enable HIGH = motor terminals
+  // shorted to GND
+  analogWrite(leftMotorEnablePin, 255);
+  digitalWrite(leftMotorForwardPin, LOW);
+  digitalWrite(leftMotorBackwardPin, LOW);
+
+  analogWrite(rightMotorEnablePin, 255);
+  digitalWrite(rightMotorForwardPin, LOW);
+  digitalWrite(rightMotorBackwardPin, LOW);
+
+  // Stow the weapon servo to its safe position whenever motors are halted.
+  // This ensures the lift arm is always lowered on any stop command or
+  // fail-safe.
+  weaponServo.write(SERVO_STOWED_ANGLE);
+}

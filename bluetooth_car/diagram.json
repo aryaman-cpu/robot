@@ -1,0 +1,30 @@
+{
+  "version": 1,
+  "author": "Antigravity",
+  "editor": "wokwi",
+  "parts": [
+    { "type": "wokwi-arduino-uno", "id": "uno", "top": 0, "left": 0, "attrs": {} },
+    { "type": "wokwi-led", "id": "led_lf", "top": -80, "left": 250, "attrs": { "color": "green", "label": "LF" } },
+    { "type": "wokwi-led", "id": "led_lb", "top": -40, "left": 250, "attrs": { "color": "red", "label": "LR" } },
+    { "type": "wokwi-led", "id": "led_rf", "top": 40, "left": 250, "attrs": { "color": "green", "label": "RF" } },
+    { "type": "wokwi-led", "id": "led_rb", "top": 80, "left": 250, "attrs": { "color": "red", "label": "RR" } },
+    { "type": "wokwi-resistor", "id": "res_lf", "top": -70, "left": 180, "attrs": { "value": "220" } },
+    { "type": "wokwi-resistor", "id": "res_lb", "top": -30, "left": 180, "attrs": { "value": "220" } },
+    { "type": "wokwi-resistor", "id": "res_rf", "top": 50, "left": 180, "attrs": { "value": "220" } },
+    { "type": "wokwi-resistor", "id": "res_rb", "top": 90, "left": 180, "attrs": { "value": "220" } }
+  ],
+  "connections": [
+    [ "uno:7", "res_lf:1", "green", [] ],
+    [ "res_lf:2", "led_lf:A", "green", [] ],
+    [ "led_lf:C", "uno:GND.1", "black", [] ],
+    [ "uno:8", "res_lb:1", "red", [] ],
+    [ "res_lb:2", "led_lb:A", "red", [] ],
+    [ "led_lb:C", "uno:GND.1", "black", [] ],
+    [ "uno:9", "res_rf:1", "green", [] ],
+    [ "res_rf:2", "led_rf:A", "green", [] ],
+    [ "led_rf:C", "uno:GND.2", "black", [] ],
+    [ "uno:10", "res_rb:1", "red", [] ],
+    [ "res_rb:2", "led_rb:A", "red", [] ],
+    [ "led_rb:C", "uno:GND.2", "black", [] ]
+  ]
+}
