@@ -43,8 +43,8 @@ const int SERVO_RAISED_ANGLE = 90; // Active, raised position
 // CRITICAL FAIL-SAFE PARAMETERS
 // ==========================================
 unsigned long lastSignalTime = 0;
-// Halt all motors if no Bluetooth command is received for 2500 milliseconds.
-const unsigned long radioSignalTimeout = 2500;
+// Halt all motors if no Bluetooth command is received for 1000 milliseconds.
+const unsigned long radioSignalTimeout = 1000;
 bool isFailSafeActive = false;
 
 // ==========================================
