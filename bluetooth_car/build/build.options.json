@@ -1,9 +1,0 @@
-{
-  "additionalFiles": "../..",
-  "compiler.optimization_flags": "",
-  "customBuildProperties": "",
-  "fqbn": "arduino:avr:uno",
-  "hardwareFolders": "/Users/guranshbir2012/Library/Arduino15/packages/arduino/hardware/avr/1.8.7,/Users/guranshbir2012/Library/Arduino15/packages/arduino/hardware/avr/1.8.7",
-  "otherLibrariesFolders": "/Users/guranshbir2012/Documents/Arduino/libraries",
-  "sketchLocation": "/Users/guranshbir2012/Development/Robotics/bluetooth_car"
-}
