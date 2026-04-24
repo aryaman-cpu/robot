@@ -5,6 +5,7 @@
 !/bluetooth_car/
 !/.gitignore
 !/AGENTS.md
+!/images/
 
 # Ignore standard build artifacts and temp files inside the allowed folders
 **/build/
