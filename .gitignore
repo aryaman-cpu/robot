@@ -9,5 +9,6 @@
 # Ignore standard build artifacts and temp files inside the allowed folders
 **/build/
 **/.pio/
-**/wokwi/
+**/wokwi.toml
+**/diagram.json
 **/.DS_Store
