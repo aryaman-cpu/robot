@@ -4,3 +4,4 @@ build/
 wokwi.toml
 diagram.json
 .DS_Store
+AGENTS.md
