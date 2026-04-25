@@ -1,15 +1,6 @@
-# Ignore everything in this directory
-/*
-
-# But don't ignore these specific files/folders
-!/bluetooth_car/
-!/.gitignore
-!/AGENTS.md
-!/images/
-
-# Ignore standard build artifacts and temp files inside the allowed folders
-**/build/
-**/.pio/
-**/wokwi.toml
-**/diagram.json
-**/.DS_Store
+# Ignore standard build artifacts and temp files
+.pio/
+build/
+wokwi.toml
+diagram.json
+.DS_Store
