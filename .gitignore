@@ -1,7 +1,4 @@
 # Ignore standard build artifacts and temp files
 .pio/
-build/
-wokwi.toml
-diagram.json
 .DS_Store
-AGENTS.md
+/AGENTS.md
