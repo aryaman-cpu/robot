@@ -1,91 +1,126 @@
 #include <Arduino.h>
-#include <Servo.h>
-#include <SoftwareSerial.h>
+#include <string.h>
 
-// Function Prototypes
+// ============================================================
+// Antigravity / RC Car Bluetooth Drive Code
+// ------------------------------------------------------------
+// Control commands accepted from the Bluetooth app:
+//   F / FORWARD / GO
+//   B / BACK / BACKWARD / REVERSE
+//   L / LEFT
+//   R / RIGHT
+//   S / STOP / BRAKE / IDLE
+//
+// This version is intentionally simple:
+// - Only drive control is included.
+// - No delay() calls are used.
+// - If valid commands stop arriving, the fail-safe stops the car.
+// - The next valid command automatically restores control.
+//
+// IMPORTANT HARDWARE NOTE:
+// This code only drives IN1/IN2/IN3/IN4.
+// For an L298N, ENA and ENB must stay enabled with their jumper caps fitted.
+// ============================================================
+
+// -----------------------------
+// Function prototypes
+// -----------------------------
 void checkBluetoothCommand();
 void checkFailSafe();
-void executeCommand(char command);
+void executeDriveCommand(char command);
+bool isValidDriveCommand(char command);
+bool readNextCommand(char &command);
+bool handleIncomingByte(char incomingByte, char &command);
+char decodeCommandToken(const char *token);
+void clearCommandBuffer();
+void debugPrint(const __FlashStringHelper *message);
+void debugPrintln(const __FlashStringHelper *message);
+void debugPrintln(const char *message);
 void moveForward();
 void moveBackward();
 void turnLeft();
 void turnRight();
-void stopAllMotors();
+void stopDriveMotors();
+void setDriveOutputs(bool leftForward, bool rightForward);
 
-// HC-05 Bluetooth Module pins
-const int bluetoothRxPin = 2; // Connect to HC-05 TX
-const int bluetoothTxPin = 3; // Connect to HC-05 RX
-SoftwareSerial bluetooth(bluetoothRxPin, bluetoothTxPin);
+// -----------------------------
+// HC-05 Bluetooth wiring
+// -----------------------------
+// Preferred: use a hardware UART for the HC-05.
+// - Uno / Nano: HC-05 TX -> D0, HC-05 RX -> D1 through a voltage divider
+// - Mega: HC-05 TX -> RX1 (19), HC-05 RX -> TX1 (18) through a divider
+//
+// If you absolutely must keep HC-05 on D2/D3, set this to 1 and rewire to:
+//   HC-05 TX -> D2, HC-05 RX -> D3 through a divider
+#define USE_SOFTWARE_SERIAL_FOR_HC05 0
 
-// L298N Motor Driver pins
-const int leftMotorEnablePin =
-    5; // PWM pin for left speed (Timer 0 - safe with Servo lib)
-const int leftMotorForwardPin = 7;
-const int leftMotorBackwardPin = 8;
+#if USE_SOFTWARE_SERIAL_FOR_HC05
+#include <SoftwareSerial.h>
+const int bluetoothRxPin = 2;
+const int bluetoothTxPin = 3;
+SoftwareSerial controlSerial(bluetoothRxPin, bluetoothTxPin);
+const bool debugSerialEnabled = true;
+#define DEBUG_SERIAL Serial
+#elif defined(UBRR1H)
+#define CONTROL_SERIAL Serial1
+#define DEBUG_SERIAL Serial
+const bool debugSerialEnabled = true;
+#else
+#define CONTROL_SERIAL Serial
+#define DEBUG_SERIAL Serial
+const bool debugSerialEnabled = false;
+#endif
 
-const int rightMotorEnablePin =
-    6; // PWM pin for right speed (Timer 0 - safe with Servo lib)
-const int rightMotorForwardPin = 9;
-const int rightMotorBackwardPin = 10;
-
-// ==========================================
-// WEAPON CONTROL (Servo)
-// ==========================================
-// NOTE: The Servo library uses Timer 1 on the Uno. Pins 9 and 10 are direction
-// pins only (digitalWrite), so there is NO conflict with our PWM enable pins 5
-// & 6.
-const int weaponServoPin = 11;
-Servo weaponServo;
-const int SERVO_STOWED_ANGLE = 0;  // Safe, lowered position
-const int SERVO_RAISED_ANGLE = 90; // Active, raised position
-
-// ==========================================
-// CRITICAL FAIL-SAFE PARAMETERS
-// ==========================================
-unsigned long lastSignalTime = 0;
-// Halt all motors if no Bluetooth command is received for 1000 milliseconds.
-const unsigned long radioSignalTimeout = 1000;
-bool isFailSafeActive = false;
-
-// ==========================================
-// SPEED CONTROL
-// ==========================================
-// Default motor speed (0-255). Adjustable with '+' and '-' commands.
-int currentSpeed = 255;
-const int SPEED_MIN = 50;
-const int SPEED_MAX = 255;
-const int SPEED_STEP = 25;
+// -----------------------------
+// Motor driver direction pins
+// -----------------------------
+const int motorIn1Pin = 7;
+const int motorIn2Pin = 8;
+const int motorIn3Pin = 9;
+const int motorIn4Pin = 10;
 
 const int statusLedPin = LED_BUILTIN;
 
+// Set either flag to true if that side runs backwards on your car.
+const bool invertLeftMotorDirection = false;
+const bool invertRightMotorDirection = false;
+
+// -----------------------------
+// Fail-safe settings
+// -----------------------------
+unsigned long lastSignalTime = 0;
+const unsigned long radioSignalTimeoutMs = 1500;
+bool isFailSafeActive = false;
+
+char incomingToken[20];
+uint8_t incomingTokenLength = 0;
+unsigned long lastBluetoothByteTime = 0;
+const unsigned long tokenFlushTimeoutMs = 40;
+
 void setup() {
-  // Initialize Serial monitor for debugging
-  Serial.begin(9600);
+#if USE_SOFTWARE_SERIAL_FOR_HC05
+  DEBUG_SERIAL.begin(115200);
+  controlSerial.begin(9600);
+  controlSerial.listen();
+#elif defined(UBRR1H)
+  DEBUG_SERIAL.begin(115200);
+  CONTROL_SERIAL.begin(9600);
+#else
+  CONTROL_SERIAL.begin(9600);
+#endif
 
-  // Initialize HC-05 Bluetooth communication
-  bluetooth.begin(9600);
-
-  // Configure motor driver pins as outputs
-  pinMode(leftMotorEnablePin, OUTPUT);
-  pinMode(leftMotorForwardPin, OUTPUT);
-  pinMode(leftMotorBackwardPin, OUTPUT);
-
-  pinMode(rightMotorEnablePin, OUTPUT);
-  pinMode(rightMotorForwardPin, OUTPUT);
-  pinMode(rightMotorBackwardPin, OUTPUT);
+  pinMode(motorIn1Pin, OUTPUT);
+  pinMode(motorIn2Pin, OUTPUT);
+  pinMode(motorIn3Pin, OUTPUT);
+  pinMode(motorIn4Pin, OUTPUT);
   pinMode(statusLedPin, OUTPUT);
+
+  // Safety first: stop everything before doing anything else.
+  stopDriveMotors();
   digitalWrite(statusLedPin, LOW);
 
-  // Attach the weapon servo and stow it immediately for safety
-  weaponServo.attach(weaponServoPin);
-  weaponServo.write(SERVO_STOWED_ANGLE);
-
-  // Initialize all motor pins to LOW immediately for safety
-  stopAllMotors();
-
-  Serial.println("Antigravity Bluetooth RC System Initialized.");
-  Serial.println(
-      "Movement: F/B/L/R/S | Weapon: U (raise) D (lower) | Speed: +/-");
+  debugPrintln(F("Bluetooth RC car ready."));
+  debugPrintln(F("Commands: F/B/L/R/S or words like FORWARD/LEFT/STOP"));
 
   lastSignalTime = millis();
 }
@@ -98,58 +133,34 @@ void loop() {
 void checkBluetoothCommand() {
   char command = '\0';
 
-  // Bluetooth is checked FIRST — it is the primary control source in
-  // competition. Serial is checked second as a fallback for Wokwi simulation /
-  // bench testing.
-  if (bluetooth.available() > 0) {
-    command = bluetooth.read();
-  } else if (Serial.available() > 0) {
-    command = Serial.read();
+  if (!readNextCommand(command)) {
+    return;
   }
 
-  if (command != '\0') {
-    if (command == '\n' || command == '\r')
-      return;
+  lastSignalTime = millis();
 
-    // Convert uppercase to lowercase for case-insensitive handling
-    if (command >= 'A' && command <= 'Z') {
-      command = command - 'A' + 'a';
-    }
-
-    Serial.print("Received Command: ");
-    Serial.println(command);
-
-    // --- FAIL-SAFE TIMER LOGIC ---
-    // Only MOVEMENT commands reset the fail-safe timer.
-    // Weapon ('u','d'), stop ('s'), and speed ('+','-') commands do NOT reset
-    // the timer. This is intentional: if the remote app crashes but gets stuck
-    // sending those commands, the fail-safe will still trigger and halt the
-    // robot.
-    if (command == 'f' || command == 'b' || command == 'l' || command == 'r') {
-      lastSignalTime = millis();
-      if (isFailSafeActive) {
-        Serial.println("Signal restored. Disengaging Fail-Safe.");
-        isFailSafeActive = false;
-      }
-    }
-
-    executeCommand(command);
+  if (isFailSafeActive) {
+    isFailSafeActive = false;
+    debugPrintln(F("Signal restored. Control resumed."));
   }
+
+  executeDriveCommand(command);
 }
 
 void checkFailSafe() {
-  if (!isFailSafeActive) {
-    if (millis() - lastSignalTime > radioSignalTimeout) {
-      isFailSafeActive = true;
-      Serial.println("CRITICAL: Signal lost! Engaging Fail-Safe.");
-      stopAllMotors();
-    }
+  if (isFailSafeActive) {
+    return;
+  }
+
+  if (millis() - lastSignalTime >= radioSignalTimeoutMs) {
+    isFailSafeActive = true;
+    stopDriveMotors();
+    debugPrintln(F("Fail-safe active: no command received."));
   }
 }
 
-void executeCommand(char command) {
+void executeDriveCommand(char command) {
   switch (command) {
-  // --- MOVEMENT ---
   case 'f':
     moveForward();
     break;
@@ -163,101 +174,196 @@ void executeCommand(char command) {
     turnRight();
     break;
   case 's':
-    stopAllMotors();
-    break;
-
-  // --- WEAPON CONTROL ---
-  // These do NOT reset the fail-safe timer (not locomotion signals).
-  case 'u':
-    weaponServo.write(SERVO_RAISED_ANGLE);
-    Serial.println("Weapon: RAISED");
-    break;
-  case 'd':
-    weaponServo.write(SERVO_STOWED_ANGLE);
-    Serial.println("Weapon: STOWED");
-    break;
-
-  // --- SPEED CONTROL ---
-  // These also do NOT reset the fail-safe timer.
-  case '+':
-    currentSpeed = min(currentSpeed + SPEED_STEP, SPEED_MAX);
-    Serial.print("Speed set to: ");
-    Serial.println(currentSpeed);
-    break;
-  case '-':
-    currentSpeed = max(currentSpeed - SPEED_STEP, SPEED_MIN);
-    Serial.print("Speed set to: ");
-    Serial.println(currentSpeed);
-    break;
-
   default:
+    stopDriveMotors();
     break;
+  }
+}
+
+bool isValidDriveCommand(char command) {
+  switch (command) {
+  case 'f':
+  case 'b':
+  case 'l':
+  case 'r':
+  case 's':
+    return true;
+  default:
+    return false;
+  }
+}
+
+bool readNextCommand(char &command) {
+  command = '\0';
+
+#if USE_SOFTWARE_SERIAL_FOR_HC05
+  while (controlSerial.available() > 0) {
+    if (handleIncomingByte(static_cast<char>(controlSerial.read()), command)) {
+      return true;
+    }
+  }
+#else
+  while (CONTROL_SERIAL.available() > 0) {
+    if (handleIncomingByte(static_cast<char>(CONTROL_SERIAL.read()), command)) {
+      return true;
+    }
+  }
+#endif
+
+  if (incomingTokenLength > 0 &&
+      millis() - lastBluetoothByteTime >= tokenFlushTimeoutMs) {
+    incomingToken[incomingTokenLength] = '\0';
+    command = decodeCommandToken(incomingToken);
+    clearCommandBuffer();
+    return isValidDriveCommand(command);
+  }
+
+  return false;
+}
+
+bool handleIncomingByte(char incomingByte, char &command) {
+  lastBluetoothByteTime = millis();
+
+  if (incomingByte >= 'A' && incomingByte <= 'Z') {
+    incomingByte = incomingByte - 'A' + 'a';
+  }
+
+  const bool isLetter = incomingByte >= 'a' && incomingByte <= 'z';
+  const bool isDigit = incomingByte >= '0' && incomingByte <= '9';
+  const bool couldBeSingleCommand =
+      incomingByte == 'f' || incomingByte == 'b' || incomingByte == 'l' ||
+      incomingByte == 'r' || incomingByte == 's' || incomingByte == '0' ||
+      incomingByte == '1' || incomingByte == '2' || incomingByte == '3' ||
+      incomingByte == '4' || incomingByte == '5';
+
+  if (isLetter || isDigit) {
+    if (incomingTokenLength == 1 && isValidDriveCommand(incomingToken[0]) &&
+        couldBeSingleCommand) {
+      command = incomingToken[0];
+      incomingToken[0] = incomingByte;
+      incomingToken[1] = '\0';
+      incomingTokenLength = 1;
+      return true;
+    }
+
+    if (incomingTokenLength < sizeof(incomingToken) - 1) {
+      incomingToken[incomingTokenLength++] = incomingByte;
+    } else {
+      // BUG FIX: After clearing an overflowed buffer, keep the current byte
+      // so the first character of the next token is not silently dropped.
+      clearCommandBuffer();
+      incomingToken[incomingTokenLength++] = incomingByte;
+    }
+    return false;
+  }
+
+  if (incomingTokenLength == 0) {
+    return false;
+  }
+
+  incomingToken[incomingTokenLength] = '\0';
+  command = decodeCommandToken(incomingToken);
+  clearCommandBuffer();
+  return isValidDriveCommand(command);
+}
+
+char decodeCommandToken(const char *token) {
+  if (strcmp(token, "f") == 0 || strcmp(token, "forward") == 0 ||
+      strcmp(token, "go") == 0 || strcmp(token, "ahead") == 0 ||
+      strcmp(token, "1") == 0) {
+    return 'f';
+  }
+
+  if (strcmp(token, "b") == 0 || strcmp(token, "back") == 0 ||
+      strcmp(token, "backward") == 0 || strcmp(token, "reverse") == 0 ||
+      strcmp(token, "2") == 0) {
+    return 'b';
+  }
+
+  if (strcmp(token, "l") == 0 || strcmp(token, "left") == 0 ||
+      strcmp(token, "3") == 0) {
+    return 'l';
+  }
+
+  if (strcmp(token, "r") == 0 || strcmp(token, "right") == 0 ||
+      strcmp(token, "4") == 0) {
+    return 'r';
+  }
+
+  if (strcmp(token, "s") == 0 || strcmp(token, "stop") == 0 ||
+      strcmp(token, "brake") == 0 || strcmp(token, "idle") == 0 ||
+      strcmp(token, "0") == 0 || strcmp(token, "5") == 0) {
+    return 's';
+  }
+
+  return '\0';
+}
+
+void clearCommandBuffer() {
+  incomingTokenLength = 0;
+  incomingToken[0] = '\0';
+}
+
+void debugPrint(const __FlashStringHelper *message) {
+  if (debugSerialEnabled) {
+    DEBUG_SERIAL.print(message);
+  }
+}
+
+void debugPrintln(const __FlashStringHelper *message) {
+  if (debugSerialEnabled) {
+    DEBUG_SERIAL.println(message);
+  }
+}
+
+void debugPrintln(const char *message) {
+  if (debugSerialEnabled) {
+    DEBUG_SERIAL.println(message);
   }
 }
 
 void moveForward() {
   digitalWrite(statusLedPin, HIGH);
-  digitalWrite(leftMotorForwardPin, HIGH);
-  digitalWrite(leftMotorBackwardPin, LOW);
-  analogWrite(leftMotorEnablePin, currentSpeed);
-  digitalWrite(rightMotorForwardPin, HIGH);
-  digitalWrite(rightMotorBackwardPin, LOW);
-  analogWrite(rightMotorEnablePin, currentSpeed);
+  setDriveOutputs(true, true);
 }
 
 void moveBackward() {
-  digitalWrite(statusLedPin, LOW);
-  digitalWrite(leftMotorForwardPin, LOW);
-  digitalWrite(leftMotorBackwardPin, HIGH);
-  analogWrite(leftMotorEnablePin, currentSpeed);
-  digitalWrite(rightMotorForwardPin, LOW);
-  digitalWrite(rightMotorBackwardPin, HIGH);
-  analogWrite(rightMotorEnablePin, currentSpeed);
+  digitalWrite(statusLedPin, HIGH);
+  setDriveOutputs(false, false);
 }
 
 void turnLeft() {
-  digitalWrite(statusLedPin, LOW);
-  // Left motor reverses, right motor drives forward = pivot left
-  digitalWrite(leftMotorForwardPin, LOW);
-  digitalWrite(leftMotorBackwardPin, HIGH);
-  analogWrite(leftMotorEnablePin, currentSpeed);
-  digitalWrite(rightMotorForwardPin, HIGH);
-  digitalWrite(rightMotorBackwardPin, LOW);
-  analogWrite(rightMotorEnablePin, currentSpeed);
+  digitalWrite(statusLedPin, HIGH);
+  setDriveOutputs(false, true);
 }
 
 void turnRight() {
-  digitalWrite(statusLedPin, LOW);
-  // Right motor reverses, left motor drives forward = pivot right
-  digitalWrite(leftMotorForwardPin, HIGH);
-  digitalWrite(leftMotorBackwardPin, LOW);
-  analogWrite(leftMotorEnablePin, currentSpeed);
-  digitalWrite(rightMotorForwardPin, LOW);
-  digitalWrite(rightMotorBackwardPin, HIGH);
-  analogWrite(rightMotorEnablePin, currentSpeed);
+  digitalWrite(statusLedPin, HIGH);
+  setDriveOutputs(true, false);
 }
 
-// --- ACTIVE MOTOR BRAKING ---
-// On the L298N, setting both IN pins LOW with the enable pin HIGH creates a
-// short-circuit brake across the motor terminals. This stops the robot MUCH
-// faster than simply cutting power (which causes the robot to coast freely).
-// This is critical for a combat robot where instant stopping is a safety
-// requirement.
-void stopAllMotors() {
+void setDriveOutputs(bool leftForward, bool rightForward) {
+  if (invertLeftMotorDirection) {
+    leftForward = !leftForward;
+  }
+
+  if (invertRightMotorDirection) {
+    rightForward = !rightForward;
+  }
+
+  digitalWrite(motorIn1Pin, leftForward ? HIGH : LOW);
+  digitalWrite(motorIn2Pin, leftForward ? LOW : HIGH);
+  digitalWrite(motorIn3Pin, rightForward ? HIGH : LOW);
+  digitalWrite(motorIn4Pin, rightForward ? LOW : HIGH);
+}
+
+void stopDriveMotors() {
   digitalWrite(statusLedPin, LOW);
 
-  // Active brake: both direction pins LOW, enable HIGH = motor terminals
-  // shorted to GND
-  analogWrite(leftMotorEnablePin, 255);
-  digitalWrite(leftMotorForwardPin, LOW);
-  digitalWrite(leftMotorBackwardPin, LOW);
-
-  analogWrite(rightMotorEnablePin, 255);
-  digitalWrite(rightMotorForwardPin, LOW);
-  digitalWrite(rightMotorBackwardPin, LOW);
-
-  // Stow the weapon servo to its safe position whenever motors are halted.
-  // This ensures the lift arm is always lowered on any stop command or
-  // fail-safe.
-  weaponServo.write(SERVO_STOWED_ANGLE);
+  // Coast to a stop by removing drive signals.
+  // This is gentler on the power rail than active braking.
+  digitalWrite(motorIn1Pin, LOW);
+  digitalWrite(motorIn2Pin, LOW);
+  digitalWrite(motorIn3Pin, LOW);
+  digitalWrite(motorIn4Pin, LOW);
 }
