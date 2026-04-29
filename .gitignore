@@ -2,3 +2,5 @@
 .pio/
 .DS_Store
 /AGENTS.md
+graphify-out/
+.graphify_python

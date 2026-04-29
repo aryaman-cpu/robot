@@ -12,9 +12,9 @@
             "type": "platformio-debug",
             "request": "launch",
             "name": "PIO Debug",
-            "executable": "/Users/guranshbir2012/Development/Robotics/.pio/build/uno/firmware.elf",
-            "projectEnvName": "uno",
-            "toolchainBinDir": "/Users/guranshbir2012/.platformio/packages/toolchain-atmelavr/bin",
+            "executable": "/Users/guranshbir2012/Development/Robotics/.pio/build/esp32/firmware.elf",
+            "projectEnvName": "esp32",
+            "toolchainBinDir": "/Users/guranshbir2012/.platformio/packages/toolchain-xtensa-esp32/bin",
             "internalConsoleOptions": "openOnSessionStart",
             "preLaunchTask": {
                 "type": "PlatformIO",
@@ -25,18 +25,18 @@
             "type": "platformio-debug",
             "request": "launch",
             "name": "PIO Debug (skip Pre-Debug)",
-            "executable": "/Users/guranshbir2012/Development/Robotics/.pio/build/uno/firmware.elf",
-            "projectEnvName": "uno",
-            "toolchainBinDir": "/Users/guranshbir2012/.platformio/packages/toolchain-atmelavr/bin",
+            "executable": "/Users/guranshbir2012/Development/Robotics/.pio/build/esp32/firmware.elf",
+            "projectEnvName": "esp32",
+            "toolchainBinDir": "/Users/guranshbir2012/.platformio/packages/toolchain-xtensa-esp32/bin",
             "internalConsoleOptions": "openOnSessionStart"
         },
         {
             "type": "platformio-debug",
             "request": "launch",
             "name": "PIO Debug (without uploading)",
-            "executable": "/Users/guranshbir2012/Development/Robotics/.pio/build/uno/firmware.elf",
-            "projectEnvName": "uno",
-            "toolchainBinDir": "/Users/guranshbir2012/.platformio/packages/toolchain-atmelavr/bin",
+            "executable": "/Users/guranshbir2012/Development/Robotics/.pio/build/esp32/firmware.elf",
+            "projectEnvName": "esp32",
+            "toolchainBinDir": "/Users/guranshbir2012/.platformio/packages/toolchain-xtensa-esp32/bin",
             "internalConsoleOptions": "openOnSessionStart",
             "loadMode": "manual"
         }

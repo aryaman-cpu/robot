@@ -1,43 +1,76 @@
 
-### 📡 1. HC-05 Bluetooth Module
-| HC-05 Pin | Arduino Pin | Notes |
-| :--- | :--- | :--- |
-| **TX** (Transmit) | **D0 / RX** on Uno/Nano, **RX1 / D19** on Mega | Preferred hardware serial receive pin |
-| **RX** (Receive) | **D1 / TX** on Uno/Nano, **TX1 / D18** on Mega | Use a resistor divider here because HC-05 RX expects 3.3V logic |
-| **VCC** | **5V** | Power |
-| **GND** | **GND** | Ground |
+### 📡 1. Bluetooth (ESP32 Built-In)
 
-**Optional fallback:**  
-If you change `USE_SOFTWARE_SERIAL_FOR_HC05` to `1` in `main.cpp`, then wire:
-- HC-05 **TX** -> **D2**
-- HC-05 **RX** -> **D3** through a voltage divider
+The ESP32 has Bluetooth Classic (SPP) built in — **no external HC-05 module required**.
+
+| Setting | Value | Notes |
+| :--- | :--- | :--- |
+| **Protocol** | Bluetooth Classic SPP | Compatible with most RC car Bluetooth apps |
+| **Device name** | `Antigravity` | Set via `BT_DEVICE_NAME` in `main.cpp` |
+| **Disconnect detect** | Automatic callback | `ESP_SPP_CLOSE_EVT` triggers immediate motor stop |
 
 ---
 
-### 🏎️ 2. L298N Motor Driver
-*Note: The current sketch is direction-only, so keep the physical jumper caps installed on **ENA** and **ENB**. That holds both motor channels enabled all the time.*
+### 🏎️ 2. BTS7960 Motor Drivers (×2)
 
-| L298N Pin | Arduino Pin | Function |
+Two BTS7960 43A motor drivers, one per side. Each side drives two motors wired **in parallel**.
+
+#### Left BTS7960 (left-side motors)
+
+| BTS7960 Pin | ESP32 GPIO | Function |
 | :--- | :--- | :--- |
-| **ENA** (Enable A) | **Leave jumper installed** | Left motor always enabled |
-| **IN1** | **D7** | Left Motor Forward |
-| **IN2** | **D8** | Left Motor Backward |
-| **IN3** | **D9** | Right Motor Forward |
-| **IN4** | **D10** | Right Motor Backward |
-| **ENB** (Enable B) | **Leave jumper installed** | Right motor always enabled |
+| **RPWM** | **GPIO 32** | Forward PWM |
+| **LPWM** | **GPIO 33** | Reverse PWM |
+| **R_EN** | **GPIO 25** | Right enable (active HIGH) |
+| **L_EN** | **GPIO 26** | Left enable (active HIGH) |
 
-**L298N Power Connections:**
-*   **12V Pin:** Connect to your main battery Positive (+).
-*   **GND Pin:** Connect to your main battery Negative (-) **AND** connect this to the Arduino's **GND** pin. *(Sharing a common ground between the Arduino and the motor driver is mandatory, or the signals won't work).*
-*   **5V Pin:** Leave empty (unless you are using it to power the Arduino via the VIN pin).
+#### Right BTS7960 (right-side motors)
+
+| BTS7960 Pin | ESP32 GPIO | Function |
+| :--- | :--- | :--- |
+| **RPWM** | **GPIO 27** | Forward PWM |
+| **LPWM** | **GPIO 14** | Reverse PWM |
+| **R_EN** | **GPIO 4** | Right enable (active HIGH) |
+| **L_EN** | **GPIO 13** | Left enable (active HIGH) |
+
+**BTS7960 Power:**
+*   **B+** / **B−**: Connect to the **12V celled battery** (positive and negative).
+*   **VCC** (logic): Connect to **ESP32 3.3V** or the 5V pin on the expansion board if the BTS7960 logic is 5V-tolerant. Check your specific module.
+*   **GND**: Common ground with ESP32 and battery.
 
 ---
 
-### 🔁 3. Direction Correction
-If one side of the car runs backwards even though the code is correct, you do **not** need to rewire immediately.
+### 💡 3. Status LED
 
-In `main.cpp`, change either of these flags from `false` to `true`:
+| Function | ESP32 GPIO | Notes |
+| :--- | :--- | :--- |
+| **Status LED** | **GPIO 2** | On-board LED on most ESP32 dev boards. HIGH = motors driving. |
+
+---
+
+### 🔋 4. Power
+
+| Source | Powers | Notes |
+| :--- | :--- | :--- |
+| **12V celled battery** | BTS7960 motor drivers → motors | High-current path |
+| **LiPo battery** | ESP32 (via expansion board) | Logic power |
+
+**⚠️ Common ground is mandatory.** Connect the GND of the 12V battery, both BTS7960 modules, the ESP32, and the LiPo supply together.
+
+---
+
+### 🔄 5. Direction Correction
+
+If one side of the car runs backwards, change the corresponding flag in `main.cpp`:
 - `invertLeftMotorDirection`
 - `invertRightMotorDirection`
 
-That lets you correct reversed motor orientation in code.
+---
+
+### 📌 6. GPIO Selection Notes
+
+These GPIOs were chosen to avoid ESP32 boot-strapping conflicts:
+- **GPIO 0, 2, 5, 15**: Boot-strapping pins (GPIO 2 is used only for the status LED — safe for output after boot).
+- **GPIO 6–11**: Connected to internal flash — **never use**.
+- **GPIO 12**: Pulls flash voltage high at boot if driven — **avoided**.
+- **GPIO 34–39**: Input-only — **not used for motor outputs**.

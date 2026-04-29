@@ -1,369 +1,531 @@
 #include <Arduino.h>
+#include "BluetoothSerial.h"
 #include <string.h>
 
 // ============================================================
-// Antigravity / RC Car Bluetooth Drive Code
+// Antigravity — ESP32 Bluetooth RC Car
 // ------------------------------------------------------------
-// Control commands accepted from the Bluetooth app:
-//   F / FORWARD / GO
-//   B / BACK / BACKWARD / REVERSE
-//   L / LEFT
-//   R / RIGHT
-//   S / STOP / BRAKE / IDLE
+// Hardware:
+//   - ESP32 with built-in Bluetooth Classic (SPP)
+//   - Two BTS7960 motor drivers (left side + right side)
+//   - Four DC motors (two per side, wired in parallel)
+//   - 12V battery for motors, LiPo for ESP32
 //
-// This version is intentionally simple:
-// - Only drive control is included.
-// - No delay() calls are used.
-// - If valid commands stop arriving, the fail-safe stops the car.
-// - The next valid command automatically restores control.
+// Commands accepted from the Bluetooth app:
+//   F / FORWARD / GO / 1
+//   B / BACK / BACKWARD / REVERSE / 2
+//   L / LEFT / 3
+//   R / RIGHT / 4
+//   S / STOP / BRAKE / IDLE / 0 / 5
+//
+// Fail-safe (dual-layer):
+//   1. Bluetooth disconnect callback → immediate motor stop
+//   2. Command timeout (1500 ms)    → motor stop if no valid data
+//   Both layers independently disable BTS7960 enable pins.
 //
 // IMPORTANT HARDWARE NOTE:
-// This code only drives IN1/IN2/IN3/IN4.
-// For an L298N, ENA and ENB must stay enabled with their jumper caps fitted.
+//   Each BTS7960 has RPWM / LPWM / R_EN / L_EN pins.
+//   RPWM drives forward, LPWM drives reverse.
+//   Enable pins are pulled LOW during fail-safe for a
+//   hardware-level motor kill on top of the software stop.
 // ============================================================
+
+// -----------------------------
+// Types & Enums
+// -----------------------------
+enum class DriveCommand {
+    None,
+    Forward,
+    Backward,
+    Left,
+    Right,
+    Stop
+};
 
 // -----------------------------
 // Function prototypes
 // -----------------------------
+void btCallback(esp_spp_cb_event_t event, esp_spp_cb_param_t *param);
 void checkBluetoothCommand();
 void checkFailSafe();
-void executeDriveCommand(char command);
-bool isValidDriveCommand(char command);
-bool readNextCommand(char &command);
-bool handleIncomingByte(char incomingByte, char &command);
-char decodeCommandToken(const char *token);
+void executeDriveCommand(DriveCommand command);
+DriveCommand readNextCommand();
+DriveCommand handleIncomingByte(char incomingByte);
+DriveCommand decodeCommandToken(const char *token);
 void clearCommandBuffer();
-void debugPrint(const __FlashStringHelper *message);
-void debugPrintln(const __FlashStringHelper *message);
-void debugPrintln(const char *message);
 void moveForward();
 void moveBackward();
 void turnLeft();
 void turnRight();
 void stopDriveMotors();
 void setDriveOutputs(bool leftForward, bool rightForward);
+void enableMotorDrivers();
+void disableMotorDrivers();
+void initPWM();
 
 // -----------------------------
-// HC-05 Bluetooth wiring
+// Bluetooth
 // -----------------------------
-// Preferred: use a hardware UART for the HC-05.
-// - Uno / Nano: HC-05 TX -> D0, HC-05 RX -> D1 through a voltage divider
-// - Mega: HC-05 TX -> RX1 (19), HC-05 RX -> TX1 (18) through a divider
-//
-// If you absolutely must keep HC-05 on D2/D3, set this to 1 and rewire to:
-//   HC-05 TX -> D2, HC-05 RX -> D3 through a divider
-#define USE_SOFTWARE_SERIAL_FOR_HC05 0
+// ESP32 has Bluetooth built-in — no external HC-05 module needed.
+// Debug output goes to USB Serial (always available on ESP32).
+BluetoothSerial SerialBT;
+const char *BT_DEVICE_NAME = "Antigravity";
 
-#if USE_SOFTWARE_SERIAL_FOR_HC05
-#include <SoftwareSerial.h>
-const int bluetoothRxPin = 2;
-const int bluetoothTxPin = 3;
-SoftwareSerial controlSerial(bluetoothRxPin, bluetoothTxPin);
-const bool debugSerialEnabled = true;
-#define DEBUG_SERIAL Serial
-#elif defined(UBRR1H)
-#define CONTROL_SERIAL Serial1
-#define DEBUG_SERIAL Serial
-const bool debugSerialEnabled = true;
-#else
-#define CONTROL_SERIAL Serial
-#define DEBUG_SERIAL Serial
-const bool debugSerialEnabled = false;
-#endif
+// Modified from the Bluetooth callback context (runs on Core 0).
+// Marked volatile so the compiler doesn't cache it on Core 1.
+volatile bool btConnected = false;
 
 // -----------------------------
-// Motor driver direction pins
+// BTS7960 motor driver pins
 // -----------------------------
-const int motorIn1Pin = 7;
-const int motorIn2Pin = 8;
-const int motorIn3Pin = 9;
-const int motorIn4Pin = 10;
+// Left BTS7960 — controls the two left-side motors (wired in parallel).
+const int leftRPWM  = 32;   // Forward PWM
+const int leftLPWM  = 33;   // Reverse PWM
+const int leftREN   = 25;   // Right-enable
+const int leftLEN   = 26;   // Left-enable
 
-const int statusLedPin = LED_BUILTIN;
+// Right BTS7960 — controls the two right-side motors (wired in parallel).
+const int rightRPWM = 27;   // Forward PWM
+const int rightLPWM = 14;   // Reverse PWM
+const int rightREN  = 4;    // Right-enable
+const int rightLEN  = 13;   // Left-enable
+
+// On-board LED for visual status (GPIO 2 on most ESP32 dev boards).
+const int statusLedPin = 2;
 
 // Set either flag to true if that side runs backwards on your car.
-const bool invertLeftMotorDirection = false;
+const bool invertLeftMotorDirection  = false;
 const bool invertRightMotorDirection = false;
+
+// -----------------------------
+// PWM settings (LEDC)
+// -----------------------------
+// 20 kHz is above the audible range — no motor whine.
+// 8-bit resolution gives duty values 0–255.
+const int PWM_FREQ       = 20000;
+const int PWM_RESOLUTION = 8;
+const int PWM_MAX_DUTY   = 255;
+
+// Default drive speed (0–255). Lower for testing, raise for full speed.
+const int driveSpeed = 255;
 
 // -----------------------------
 // Fail-safe settings
 // -----------------------------
-unsigned long lastSignalTime = 0;
-const unsigned long radioSignalTimeoutMs = 1500;
-bool isFailSafeActive = false;
+unsigned long lastSignalTime         = 0;
+const unsigned long signalTimeoutMs  = 1500;
+bool isFailSafeActive                = false;
 
-char incomingToken[20];
-uint8_t incomingTokenLength = 0;
+// Command parser buffer
+char     incomingToken[20];
+uint8_t  incomingTokenLength       = 0;
 unsigned long lastBluetoothByteTime = 0;
-const unsigned long tokenFlushTimeoutMs = 40;
+const unsigned long tokenFlushMs    = 40;
 
-void setup() {
-#if USE_SOFTWARE_SERIAL_FOR_HC05
-  DEBUG_SERIAL.begin(115200);
-  controlSerial.begin(9600);
-  controlSerial.listen();
-#elif defined(UBRR1H)
-  DEBUG_SERIAL.begin(115200);
-  CONTROL_SERIAL.begin(9600);
-#else
-  CONTROL_SERIAL.begin(9600);
-#endif
-
-  pinMode(motorIn1Pin, OUTPUT);
-  pinMode(motorIn2Pin, OUTPUT);
-  pinMode(motorIn3Pin, OUTPUT);
-  pinMode(motorIn4Pin, OUTPUT);
-  pinMode(statusLedPin, OUTPUT);
-
-  // Safety first: stop everything before doing anything else.
-  stopDriveMotors();
-  digitalWrite(statusLedPin, LOW);
-
-  debugPrintln(F("Bluetooth RC car ready."));
-  debugPrintln(F("Commands: F/B/L/R/S or words like FORWARD/LEFT/STOP"));
-
-  lastSignalTime = millis();
-}
-
-void loop() {
-  checkBluetoothCommand();
-  checkFailSafe();
-}
-
-void checkBluetoothCommand() {
-  char command = '\0';
-
-  if (!readNextCommand(command)) {
-    return;
-  }
-
-  lastSignalTime = millis();
-
-  if (isFailSafeActive) {
-    isFailSafeActive = false;
-    debugPrintln(F("Signal restored. Control resumed."));
-  }
-
-  executeDriveCommand(command);
-}
-
-void checkFailSafe() {
-  if (isFailSafeActive) {
-    return;
-  }
-
-  if (millis() - lastSignalTime >= radioSignalTimeoutMs) {
-    isFailSafeActive = true;
-    stopDriveMotors();
-    debugPrintln(F("Fail-safe active: no command received."));
-  }
-}
-
-void executeDriveCommand(char command) {
-  switch (command) {
-  case 'f':
-    moveForward();
-    break;
-  case 'b':
-    moveBackward();
-    break;
-  case 'l':
-    turnLeft();
-    break;
-  case 'r':
-    turnRight();
-    break;
-  case 's':
-  default:
-    stopDriveMotors();
-    break;
-  }
-}
-
-bool isValidDriveCommand(char command) {
-  switch (command) {
-  case 'f':
-  case 'b':
-  case 'l':
-  case 'r':
-  case 's':
-    return true;
-  default:
-    return false;
-  }
-}
-
-bool readNextCommand(char &command) {
-  command = '\0';
-
-#if USE_SOFTWARE_SERIAL_FOR_HC05
-  while (controlSerial.available() > 0) {
-    if (handleIncomingByte(static_cast<char>(controlSerial.read()), command)) {
-      return true;
+// ============================================================
+// Bluetooth SPP event callback
+// ============================================================
+// Runs in the Bluetooth stack task on Core 0.
+// Only touches the volatile bool — no heavy work here.
+void btCallback(esp_spp_cb_event_t event, esp_spp_cb_param_t *param)
+{
+    if (event == ESP_SPP_SRV_OPEN_EVT)
+    {
+        btConnected = true;
+        Serial.println("[BT] Client connected.");
     }
-  }
-#else
-  while (CONTROL_SERIAL.available() > 0) {
-    if (handleIncomingByte(static_cast<char>(CONTROL_SERIAL.read()), command)) {
-      return true;
+    else if (event == ESP_SPP_CLOSE_EVT)
+    {
+        btConnected = false;
+        Serial.println("[BT] Client disconnected — fail-safe triggered.");
     }
-  }
-#endif
+}
 
-  if (incomingTokenLength > 0 &&
-      millis() - lastBluetoothByteTime >= tokenFlushTimeoutMs) {
+// ============================================================
+// setup()
+// ============================================================
+void setup()
+{
+    Serial.begin(115200);
+
+    // Motor enable pins — set LOW immediately (motors disabled).
+    pinMode(leftREN,  OUTPUT);
+    pinMode(leftLEN,  OUTPUT);
+    pinMode(rightREN, OUTPUT);
+    pinMode(rightLEN, OUTPUT);
+    disableMotorDrivers();
+
+    // Status LED
+    pinMode(statusLedPin, OUTPUT);
+    digitalWrite(statusLedPin, LOW);
+
+    // Initialise LEDC PWM on the four motor-PWM pins.
+    initPWM();
+
+    // Safety first: all PWM duty to zero.
+    stopDriveMotors();
+
+    // Start Bluetooth with event callback.
+    SerialBT.register_callback(btCallback);
+    SerialBT.begin(BT_DEVICE_NAME);
+
+    Serial.println("Antigravity ESP32 RC car ready.");
+    Serial.print("Bluetooth name: ");
+    Serial.println(BT_DEVICE_NAME);
+    Serial.println("Commands: F/B/L/R/S or FORWARD/LEFT/STOP etc.");
+
+    lastSignalTime = millis();
+}
+
+// ============================================================
+// loop()
+// ============================================================
+void loop()
+{
+    // If Bluetooth dropped, force-stop immediately.
+    if (!btConnected && !isFailSafeActive)
+    {
+        isFailSafeActive = true;
+        stopDriveMotors();
+        disableMotorDrivers();
+    }
+
+    checkBluetoothCommand();
+    checkFailSafe();
+}
+
+// ============================================================
+// Bluetooth command handling
+// ============================================================
+void checkBluetoothCommand()
+{
+    if (!btConnected)
+    {
+        // Poka-Yoke: Flush any stale data to prevent processing after disconnect
+        while (SerialBT.available() > 0)
+        {
+            SerialBT.read();
+        }
+        clearCommandBuffer();
+        return;
+    }
+
+    DriveCommand command = readNextCommand();
+
+    if (command == DriveCommand::None)
+    {
+        return;
+    }
+
+    // A valid command arrived — refresh the fail-safe timer.
+    lastSignalTime = millis();
+
+    if (isFailSafeActive)
+    {
+        isFailSafeActive = false;
+        enableMotorDrivers();
+        Serial.println("Signal restored. Control resumed.");
+    }
+
+    executeDriveCommand(command);
+}
+
+// ============================================================
+// Fail-safe (timeout path)
+// ============================================================
+void checkFailSafe()
+{
+    if (isFailSafeActive)
+    {
+        return;
+    }
+
+    if (millis() - lastSignalTime >= signalTimeoutMs)
+    {
+        isFailSafeActive = true;
+        stopDriveMotors();
+        disableMotorDrivers();
+        Serial.println("Fail-safe active: no command received.");
+    }
+}
+
+// ============================================================
+// Drive command dispatcher
+// ============================================================
+void executeDriveCommand(DriveCommand command)
+{
+    switch (command)
+    {
+    case DriveCommand::Forward:
+        moveForward();
+        break;
+    case DriveCommand::Backward:
+        moveBackward();
+        break;
+    case DriveCommand::Left:
+        turnLeft();
+        break;
+    case DriveCommand::Right:
+        turnRight();
+        break;
+    case DriveCommand::Stop:
+    default:
+        stopDriveMotors();
+        break;
+    }
+}
+
+// ============================================================
+// Read next complete command from Bluetooth serial
+// ============================================================
+DriveCommand readNextCommand()
+{
+    while (SerialBT.available() > 0)
+    {
+        DriveCommand cmd = handleIncomingByte(static_cast<char>(SerialBT.read()));
+        if (cmd != DriveCommand::None)
+        {
+            return cmd;
+        }
+    }
+
+    // Flush a partial token if no new bytes arrived within tokenFlushMs.
+    if (incomingTokenLength > 0 &&
+        millis() - lastBluetoothByteTime >= tokenFlushMs)
+    {
+        incomingToken[incomingTokenLength] = '\0';
+        DriveCommand cmd = decodeCommandToken(incomingToken);
+        clearCommandBuffer();
+        return cmd;
+    }
+
+    return DriveCommand::None;
+}
+
+// ============================================================
+// Byte-level parser (single-char lookahead + word tokens)
+// ============================================================
+DriveCommand handleIncomingByte(char incomingByte)
+{
+    lastBluetoothByteTime = millis();
+
+    // Normalise to lowercase.
+    if (incomingByte >= 'A' && incomingByte <= 'Z')
+    {
+        incomingByte = incomingByte - 'A' + 'a';
+    }
+
+    const bool isLetter = incomingByte >= 'a' && incomingByte <= 'z';
+    const bool isDigit  = incomingByte >= '0' && incomingByte <= '9';
+    const bool couldBeSingleCommand =
+        incomingByte == 'f' || incomingByte == 'b' ||
+        incomingByte == 'l' || incomingByte == 'r' ||
+        incomingByte == 's' || incomingByte == '0' ||
+        incomingByte == '1' || incomingByte == '2' ||
+        incomingByte == '3' || incomingByte == '4' ||
+        incomingByte == '5';
+
+    if (isLetter || isDigit)
+    {
+        // Single-char lookahead: if the buffer holds exactly one valid
+        // drive letter and the new byte could also be a standalone
+        // command, dispatch the buffered char immediately.
+        if (incomingTokenLength == 1 && couldBeSingleCommand)
+        {
+            DriveCommand bufferedCmd = decodeCommandToken(incomingToken);
+            if (bufferedCmd != DriveCommand::None)
+            {
+                incomingToken[0] = incomingByte;
+                incomingToken[1] = '\0';
+                incomingTokenLength = 1;
+                return bufferedCmd;
+            }
+        }
+
+        if (incomingTokenLength < sizeof(incomingToken) - 1)
+        {
+            incomingToken[incomingTokenLength++] = incomingByte;
+        }
+        else
+        {
+            // Buffer overflow — clear and keep the current byte.
+            clearCommandBuffer();
+            incomingToken[incomingTokenLength++] = incomingByte;
+        }
+        return DriveCommand::None;
+    }
+
+    // Non-alphanumeric byte acts as a delimiter.
+    if (incomingTokenLength == 0)
+    {
+        return DriveCommand::None;
+    }
+
     incomingToken[incomingTokenLength] = '\0';
-    command = decodeCommandToken(incomingToken);
+    DriveCommand cmd = decodeCommandToken(incomingToken);
     clearCommandBuffer();
-    return isValidDriveCommand(command);
-  }
-
-  return false;
+    return cmd;
 }
 
-bool handleIncomingByte(char incomingByte, char &command) {
-  lastBluetoothByteTime = millis();
-
-  if (incomingByte >= 'A' && incomingByte <= 'Z') {
-    incomingByte = incomingByte - 'A' + 'a';
-  }
-
-  const bool isLetter = incomingByte >= 'a' && incomingByte <= 'z';
-  const bool isDigit = incomingByte >= '0' && incomingByte <= '9';
-  const bool couldBeSingleCommand =
-      incomingByte == 'f' || incomingByte == 'b' || incomingByte == 'l' ||
-      incomingByte == 'r' || incomingByte == 's' || incomingByte == '0' ||
-      incomingByte == '1' || incomingByte == '2' || incomingByte == '3' ||
-      incomingByte == '4' || incomingByte == '5';
-
-  if (isLetter || isDigit) {
-    if (incomingTokenLength == 1 && isValidDriveCommand(incomingToken[0]) &&
-        couldBeSingleCommand) {
-      command = incomingToken[0];
-      incomingToken[0] = incomingByte;
-      incomingToken[1] = '\0';
-      incomingTokenLength = 1;
-      return true;
+// ============================================================
+// Token-to-command decoder
+// ============================================================
+DriveCommand decodeCommandToken(const char *token)
+{
+    if (strcmp(token, "f") == 0 || strcmp(token, "forward") == 0 ||
+        strcmp(token, "go") == 0 || strcmp(token, "ahead") == 0 ||
+        strcmp(token, "1") == 0)
+    {
+        return DriveCommand::Forward;
     }
 
-    if (incomingTokenLength < sizeof(incomingToken) - 1) {
-      incomingToken[incomingTokenLength++] = incomingByte;
-    } else {
-      // BUG FIX: After clearing an overflowed buffer, keep the current byte
-      // so the first character of the next token is not silently dropped.
-      clearCommandBuffer();
-      incomingToken[incomingTokenLength++] = incomingByte;
+    if (strcmp(token, "b") == 0 || strcmp(token, "back") == 0 ||
+        strcmp(token, "backward") == 0 || strcmp(token, "reverse") == 0 ||
+        strcmp(token, "2") == 0)
+    {
+        return DriveCommand::Backward;
     }
-    return false;
-  }
 
-  if (incomingTokenLength == 0) {
-    return false;
-  }
+    if (strcmp(token, "l") == 0 || strcmp(token, "left") == 0 ||
+        strcmp(token, "3") == 0)
+    {
+        return DriveCommand::Left;
+    }
 
-  incomingToken[incomingTokenLength] = '\0';
-  command = decodeCommandToken(incomingToken);
-  clearCommandBuffer();
-  return isValidDriveCommand(command);
+    if (strcmp(token, "r") == 0 || strcmp(token, "right") == 0 ||
+        strcmp(token, "4") == 0)
+    {
+        return DriveCommand::Right;
+    }
+
+    if (strcmp(token, "s") == 0 || strcmp(token, "stop") == 0 ||
+        strcmp(token, "brake") == 0 || strcmp(token, "idle") == 0 ||
+        strcmp(token, "0") == 0 || strcmp(token, "5") == 0)
+    {
+        return DriveCommand::Stop;
+    }
+
+    return DriveCommand::None;
 }
 
-char decodeCommandToken(const char *token) {
-  if (strcmp(token, "f") == 0 || strcmp(token, "forward") == 0 ||
-      strcmp(token, "go") == 0 || strcmp(token, "ahead") == 0 ||
-      strcmp(token, "1") == 0) {
-    return 'f';
-  }
-
-  if (strcmp(token, "b") == 0 || strcmp(token, "back") == 0 ||
-      strcmp(token, "backward") == 0 || strcmp(token, "reverse") == 0 ||
-      strcmp(token, "2") == 0) {
-    return 'b';
-  }
-
-  if (strcmp(token, "l") == 0 || strcmp(token, "left") == 0 ||
-      strcmp(token, "3") == 0) {
-    return 'l';
-  }
-
-  if (strcmp(token, "r") == 0 || strcmp(token, "right") == 0 ||
-      strcmp(token, "4") == 0) {
-    return 'r';
-  }
-
-  if (strcmp(token, "s") == 0 || strcmp(token, "stop") == 0 ||
-      strcmp(token, "brake") == 0 || strcmp(token, "idle") == 0 ||
-      strcmp(token, "0") == 0 || strcmp(token, "5") == 0) {
-    return 's';
-  }
-
-  return '\0';
+void clearCommandBuffer()
+{
+    incomingTokenLength = 0;
+    incomingToken[0] = '\0';
 }
 
-void clearCommandBuffer() {
-  incomingTokenLength = 0;
-  incomingToken[0] = '\0';
+// ============================================================
+// Motor control — BTS7960 via LEDC PWM
+// ============================================================
+// Each BTS7960 has two PWM inputs:
+//   RPWM — drive forward (HIGH side)
+//   LPWM — drive reverse  (LOW side)
+// To go forward:  RPWM = duty, LPWM = 0
+// To go reverse:  RPWM = 0,    LPWM = duty
+// To coast/stop:  RPWM = 0,    LPWM = 0
+
+void moveForward()
+{
+    digitalWrite(statusLedPin, HIGH);
+    setDriveOutputs(true, true);
 }
 
-void debugPrint(const __FlashStringHelper *message) {
-  if (debugSerialEnabled) {
-    DEBUG_SERIAL.print(message);
-  }
+void moveBackward()
+{
+    digitalWrite(statusLedPin, HIGH);
+    setDriveOutputs(false, false);
 }
 
-void debugPrintln(const __FlashStringHelper *message) {
-  if (debugSerialEnabled) {
-    DEBUG_SERIAL.println(message);
-  }
+void turnLeft()
+{
+    digitalWrite(statusLedPin, HIGH);
+    setDriveOutputs(false, true);
 }
 
-void debugPrintln(const char *message) {
-  if (debugSerialEnabled) {
-    DEBUG_SERIAL.println(message);
-  }
+void turnRight()
+{
+    digitalWrite(statusLedPin, HIGH);
+    setDriveOutputs(true, false);
 }
 
-void moveForward() {
-  digitalWrite(statusLedPin, HIGH);
-  setDriveOutputs(true, true);
+void setDriveOutputs(bool leftForward, bool rightForward)
+{
+    if (invertLeftMotorDirection)
+    {
+        leftForward = !leftForward;
+    }
+    if (invertRightMotorDirection)
+    {
+        rightForward = !rightForward;
+    }
+
+    // Left BTS7960
+    if (leftForward)
+    {
+        ledcWrite(leftRPWM, driveSpeed);
+        ledcWrite(leftLPWM, 0);
+    }
+    else
+    {
+        ledcWrite(leftRPWM, 0);
+        ledcWrite(leftLPWM, driveSpeed);
+    }
+
+    // Right BTS7960
+    if (rightForward)
+    {
+        ledcWrite(rightRPWM, driveSpeed);
+        ledcWrite(rightLPWM, 0);
+    }
+    else
+    {
+        ledcWrite(rightRPWM, 0);
+        ledcWrite(rightLPWM, driveSpeed);
+    }
 }
 
-void moveBackward() {
-  digitalWrite(statusLedPin, HIGH);
-  setDriveOutputs(false, false);
+void stopDriveMotors()
+{
+    digitalWrite(statusLedPin, LOW);
+
+    // Zero all PWM outputs — motors coast to a stop.
+    ledcWrite(leftRPWM,  0);
+    ledcWrite(leftLPWM,  0);
+    ledcWrite(rightRPWM, 0);
+    ledcWrite(rightLPWM, 0);
 }
 
-void turnLeft() {
-  digitalWrite(statusLedPin, HIGH);
-  setDriveOutputs(false, true);
+// ============================================================
+// BTS7960 enable / disable
+// ============================================================
+// Pulling all four enable lines LOW is a hardware-level motor kill.
+// This is the second layer of fail-safe on top of zeroing PWM.
+
+void enableMotorDrivers()
+{
+    digitalWrite(leftREN,  HIGH);
+    digitalWrite(leftLEN,  HIGH);
+    digitalWrite(rightREN, HIGH);
+    digitalWrite(rightLEN, HIGH);
 }
 
-void turnRight() {
-  digitalWrite(statusLedPin, HIGH);
-  setDriveOutputs(true, false);
+void disableMotorDrivers()
+{
+    digitalWrite(leftREN,  LOW);
+    digitalWrite(leftLEN,  LOW);
+    digitalWrite(rightREN, LOW);
+    digitalWrite(rightLEN, LOW);
 }
 
-void setDriveOutputs(bool leftForward, bool rightForward) {
-  if (invertLeftMotorDirection) {
-    leftForward = !leftForward;
-  }
-
-  if (invertRightMotorDirection) {
-    rightForward = !rightForward;
-  }
-
-  digitalWrite(motorIn1Pin, leftForward ? HIGH : LOW);
-  digitalWrite(motorIn2Pin, leftForward ? LOW : HIGH);
-  digitalWrite(motorIn3Pin, rightForward ? HIGH : LOW);
-  digitalWrite(motorIn4Pin, rightForward ? LOW : HIGH);
-}
-
-void stopDriveMotors() {
-  digitalWrite(statusLedPin, LOW);
-
-  // Coast to a stop by removing drive signals.
-  // This is gentler on the power rail than active braking.
-  digitalWrite(motorIn1Pin, LOW);
-  digitalWrite(motorIn2Pin, LOW);
-  digitalWrite(motorIn3Pin, LOW);
-  digitalWrite(motorIn4Pin, LOW);
+// ============================================================
+// LEDC PWM initialisation
+// ============================================================
+void initPWM()
+{
+    // Attach each BTS7960 PWM pin to the LEDC controller.
+    // ledcAttach(pin, frequency, resolution) — ESP32 Arduino Core 3.x API.
+    ledcAttach(leftRPWM,  PWM_FREQ, PWM_RESOLUTION);
+    ledcAttach(leftLPWM,  PWM_FREQ, PWM_RESOLUTION);
+    ledcAttach(rightRPWM, PWM_FREQ, PWM_RESOLUTION);
+    ledcAttach(rightLPWM, PWM_FREQ, PWM_RESOLUTION);
 }
